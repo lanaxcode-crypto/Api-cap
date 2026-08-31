@@ -22,15 +22,25 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///captcha.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    echo=False
+)
 
 class CaptchaRecord(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     img_hash: str = Field(index=True, unique=True)
     captcha_url: Optional[str] = None
-    answers: str  # Format: "5,3,4"
+    answers: str
 
-SQLModel.metadata.create_all(engine)
+@app.on_event("startup")
+def on_startup():
+    SQLModel.metadata.create_all(engine)
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 class SaveCaptchaRequest(BaseModel):
     url: str
@@ -47,7 +57,6 @@ class MultiCheckRequest(BaseModel):
     urls: List[str]
 
 def get_image_md5(url: str) -> str:
-    """Download image stream and compute MD5 hash based on image bytes"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
@@ -62,7 +71,6 @@ def root():
 
 @app.post("/api/save")
 def save_answer(data: SaveCaptchaRequest):
-    """Simpan satu jawaban captcha"""
     if not data.answers:
         raise HTTPException(status_code=400, detail="Jawaban tidak boleh kosong")
     
@@ -89,7 +97,6 @@ def save_answer(data: SaveCaptchaRequest):
 
 @app.post("/api/save-batch")
 def save_batch_answers(data: BatchSaveRequest):
-    """Simpan banyak jawaban captcha sekaligus (Multi URL)"""
     results = []
     with Session(engine) as session:
         for item in data.items:
@@ -111,7 +118,6 @@ def save_batch_answers(data: BatchSaveRequest):
 
 @app.get("/api/solve")
 def get_answer(url: str = Query(..., description="URL Captcha GIF")):
-    """Cek satu URL captcha"""
     try:
         img_hash = get_image_md5(url)
     except HTTPException as e:
@@ -139,7 +145,6 @@ def get_answer(url: str = Query(..., description="URL Captcha GIF")):
 
 @app.post("/api/solve-multi")
 def solve_multi(data: MultiCheckRequest):
-    """Cek banyak URL captcha sekaligus (misal cek captchaUrl + traps)"""
     results: Dict[str, Any] = {}
     with Session(engine) as session:
         for url in data.urls:
@@ -164,7 +169,6 @@ def solve_multi(data: MultiCheckRequest):
 
 @app.get("/api/list")
 def list_records():
-    """Lihat semua data captcha yang tersimpan"""
     with Session(engine) as session:
         records = session.exec(select(CaptchaRecord)).all()
         return [
@@ -179,7 +183,6 @@ def list_records():
 
 @app.delete("/api/delete/{img_hash}")
 def delete_record(img_hash: str):
-    """Hapus data captcha berdasarkan hash"""
     with Session(engine) as session:
         record = session.exec(select(CaptchaRecord).where(CaptchaRecord.img_hash == img_hash)).first()
         if not record:
